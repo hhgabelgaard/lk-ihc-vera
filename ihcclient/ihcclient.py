@@ -19,6 +19,8 @@ loopClient = None
 cj = None
 devices = {}
 exitFlag = 0
+restartFlag = 0
+outfile = False
 
 import xml.etree.ElementTree as xml
 
@@ -30,7 +32,7 @@ def IHC_LoadProjectFile():
     global client, cj
     
     url = config.IHC_CON + '/wsdl/controller.wsdl'
-    clientCtl =  Client(url)
+    clientCtl =  Client(url, timeout=500)
     clientCtl.options.transport.cookiejar = cj
     clientCtl.set_options(location=config.IHC_CON + '/ws/ControllerService')    
     prj = clientCtl.service.getProjectInfo()
@@ -96,13 +98,13 @@ def IHC_Login():
     global client, cj, loopClient
     print "Login: ",time.asctime( time.localtime(time.time()) )
     url = config.IHC_CON + '/wsdl/authentication.wsdl'
-    client = Client(url)
+    client = Client(url, timeout=500)
     client.set_options(location=config.IHC_CON + '/ws/AuthenticationService')
     client.service.authenticate(config.IHC_PASS, config.IHC_USER, "treeview")
     cj = client.options.transport.cookiejar
     
     url = config.IHC_CON + '/wsdl/resourceinteraction.wsdl'
-    client =  Client(url)
+    client =  Client(url, timeout=500)
     client.options.transport.cookiejar = cj
     client.set_options(location=config.IHC_CON + '/ws/ResourceInteractionService')
     loopClient = client
@@ -122,8 +124,10 @@ def IHC_SetValue(device, avalue):
 
 def IHC_SetDimmer(device, avalue):
     val = client.factory.create('ns1:WSIntegerValue')
-    
-    print val
+
+    print "SetDimmer"
+    print device
+    print avalue
     val.integer = int(avalue)
     try:
         return client.service.setResourceValue(device, True, 'airlink_dimming', val)
@@ -158,12 +162,15 @@ class waitForNot(threading.Thread):
     global devices
     global exitFlag
     global queueLock, workQueue
+    global restartFlag
+   
     
     def __init__(self, wfile):
         self.wfile = wfile
         threading.Thread.__init__(self)
         
     def run(self):
+         global outfile
          IHC_EnableNotifications(devices.keys())
          while 1:
              val = IHC_waitForNotifications(config.EVENTWAIT, devices.keys())
@@ -180,7 +187,13 @@ class waitForNot(threading.Thread):
                               devices[res.resourceID]['value'] = value
              ##self.wfile.write('looping\n\r')
              if len(response):
+               try:
+                 print response  
+                 #if outfile:  
                  self.wfile.write(response)
+               except:
+		 restartFlag = 1
+		 self.exit()                    
 #                 queueLock.acquire()
 #                 workQueue.put(response)
 #                 queueLock.release()
@@ -189,15 +202,23 @@ class waitForNot(threading.Thread):
                  self.exit()    
                
 class MyTCPHandler(SocketServer.StreamRequestHandler):
+   
+##    def __init__(self, request, client_address, server):
+##        SocketServer.StreamRequestHandler.__init__(self, request, client_address, server)
+##        waitFor = waitForNot(outfile)
+##        waitFor.run()
+##        return
+
 
     def handle(self):
         global devices
         global exitFlag
         global queueLock, workQueue
+        global outfile 
         # self.rfile is a file-like object created by the handler;
         # we can now use e.g. readline() instead of raw recv() calls
         waitFor = waitForNot(self.wfile)
-        
+        #outfile = self.wfile
         self.stopflag = False
         while not self.stopflag:
 #            queueLock.acquire()
@@ -225,8 +246,14 @@ class MyTCPHandler(SocketServer.StreamRequestHandler):
 		if waitFor.is_alive():
 		    exitFlag = 1	
                 for address, device in devices.iteritems():
+                    print device['name'].encode('utf-8')
                     self.wfile.write((u'device,%d,%s,%s/%s/%s\n' % (address, device['type'], device['room'], device['pos'], device['name'])).encode('utf-8'))
-                self.wfile.write((u'deviceend\n'))    
+                self.wfile.write((u'deviceend\n'))
+                for address, device in devices.iteritems():
+                     response = 'updatevalue,%d,%s\n' %(address, device['value'])
+                     print response
+                     self.wfile.write(response)
+                     
             elif command == 'setvalue':
                 if len(args) == 2:
                     self.wfile.write(IHC_SetValue(args[0], args[1]))
@@ -262,7 +289,8 @@ class MyTCPHandler(SocketServer.StreamRequestHandler):
                 self.wfile.write('OK, SEE YOU LATER\n')
                 self.stopflag = True
 		exit()
-            else:
+            else: 
+                #if self.wfile:
                 self.wfile.write('Unknown command: "%s"\n' % command)
 
 	def finish(self):
