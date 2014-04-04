@@ -1,3 +1,4 @@
+# -*- coding: cp1252 -*-
 import sys
 import SocketServer
 import select 
@@ -73,6 +74,16 @@ def IHC_ParseProjectFile(filename):
                                                         'name' : dataLine.get('name'), 
                                                         'pos'  : dataLine.get('position'), 
                                                         'value': '?'}
+            inputs = dataLine.findall('dataline_input')
+            for ip in inputs:
+                devices[hex2dec(ip.get('id'))] =     {'type' : 'Input', 
+                                                       'room' : gname, 
+                                                       'name' : dataLine.get('name'), 
+                                                       'pos'  : dataLine.get('position'), 
+                                                       'value': '?',
+                                                       'masterid' : hex2dec(dataLine.get('id')),
+                                                       'subid': [u'Tryk (øverst venstre)',u'Tryk (øverst højre)',u'Tryk (nederst venstre)',u'Tryk (nederst højre)'].index(ip.get('name')) + 1
+                                                       }
         airLinks = group.findall('product_airlink')
         for airLink in airLinks:
             ## print airLink, airLink.get('name'), airLink.get('position')
@@ -91,8 +102,30 @@ def IHC_ParseProjectFile(filename):
                                                          'room' : gname, 
                                                          'name' : airLink.get('name'), 
                                                          'pos'  : airLink.get('position'), 
-                                                         'value': '?'}        
-    ## print devices
+                                                         'value': '?'}
+            inputs = airLink.findall('airlink_input')
+            for ip in inputs:
+                devices[hex2dec(ip.get('id'))] =     {'type' : 'Input', 
+                                                       'room' : gname, 
+                                                       'name' : airLink.get('name'), 
+                                                       'pos'  : airLink.get('position'), 
+                                                       'value': '?',
+                                                       'masterid' : hex2dec(airLink.get('id')),
+                                                       'subid': hex2dec(ip.get('address_channel'))
+                                                       }
+                                                       
+        functionblocks = group.findall('functionblock')
+        for fb in functionblocks:
+            if fb.attrib.has_key('master_name') and fb.attrib['master_name'] == 'Scenectl':
+                res = fb.find('outputs/resource_integer')
+                if res is not None:
+                    devices[hex2dec(res.get('id'))] =     {'type' : 'Scenectl', 
+                                                             'room' : gname, 
+                                                             'name' : fb.get('name'), 
+                                                             'pos'  : '', 
+                                                             'value': '?'} 
+                    print "Funktionsblok",  hex2dec(res.get('id')), devices[hex2dec(res.get('id'))]      
+    ##print devices
 
 def IHC_Login():
     global client, cj, loopClient
@@ -136,6 +169,21 @@ def IHC_SetDimmer(device, avalue):
         print WebFault
         IHC_Login()
         return IHC_SetDimmer(device, avalue)
+
+def IHC_SetResource(device, avalue):
+    val = client.factory.create('ns1:WSIntegerValue')
+
+    print "SetResource"
+    print device
+    print avalue
+    val.integer = int(avalue)
+    try:
+        return client.service.setResourceValue(device, True, 'resource_integer', val)
+    except (WebFault):
+	print "Exception in SetResource"
+        print WebFault
+        IHC_Login()
+        return IHC_SetResource(device, avalue)
         
 def IHC_EnableNotifications(devices):
     try:
@@ -178,13 +226,26 @@ class waitForNot(threading.Thread):
              if val is not None:
                  for res in val:
                      if res is not None:
-                         if devices[res.resourceID]['type'] == 'Dimmer':
+                         if devices[res.resourceID]['type'] == 'Dimmer' or devices[res.resourceID]['type'] == 'Scenectl':
                              value = res.value.integer
                          else:
                              value = res.value.value
                          if devices[res.resourceID]['value'] <> value:
-                              response += 'updatevalue,%d,%s\n' %(res.resourceID, value)
-                              devices[res.resourceID]['value'] = value
+                              
+			      if devices[res.resourceID]['type'] == 'Input':
+                                  if devices[res.resourceID].has_key('masterid'):
+                                    
+                                       response += 'event,%d,%d,%s\n' %(devices[res.resourceID]['masterid'], devices[res.resourceID]['subid'], value)
+                                                    
+                              elif devices[res.resourceID]['type'] == 'Scenectl': 
+                                     if value == 0:
+                                         response += 'event,%d,%s,0\n' %(res.resourceID, devices[res.resourceID]['value'])
+                                     else:
+                                         response += 'event,%d,%d,1\n' %(res.resourceID, value)
+				     devices[res.resourceID]['value'] = value
+			      else:
+				    response += 'updatevalue,%d,%s\n' %(res.resourceID, value) 
+                              	    devices[res.resourceID]['value'] = value
              ##self.wfile.write('looping\n\r')
              if len(response):
                try:
@@ -247,10 +308,15 @@ class MyTCPHandler(SocketServer.StreamRequestHandler):
 		    exitFlag = 1	
                 for address, device in devices.iteritems():
                     print device['name'].encode('utf-8')
-                    self.wfile.write((u'device,%d,%s,%s/%s/%s\n' % (address, device['type'], device['room'], device['pos'], device['name'])).encode('utf-8'))
+                    if device.has_key('masterid'):
+                        if device['subid'] == 1:
+                            self.wfile.write((u'device,%d,Scenectl,%s/%s/%s\n' % (device['masterid'], device['room'], device['pos'], device['name'])).encode('utf-8'))
+                    else:                                   
+                        self.wfile.write((u'device,%d,%s,%s/%s/%s\n' % (address, device['type'], device['room'], device['pos'], device['name'])).encode('utf-8'))
                 self.wfile.write((u'deviceend\n'))
                 for address, device in devices.iteritems():
-                     response = 'updatevalue,%d,%s\n' %(address, device['value'])
+                     if device['type'] != "scenectl":
+                         response = 'updatevalue,%d,%s\n' %(address, device['value'])
                      print response
                      self.wfile.write(response)
                      
