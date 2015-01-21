@@ -340,14 +340,14 @@ class MyTCPHandler(SocketServer.StreamRequestHandler):
                                   device['room'],
                                      device['pos'],
                                      device['name'])).encode('utf-8'))
-                        else:
-                            self.wfile.write(
-                                (u'device,%d,%s,%s/%s/%s\n' %
-                                 (address,
-                                  device['type'],
-                                     device['room'],
-                                     device['pos'],
-                                     device['name'])).encode('utf-8'))
+                    else:
+                        self.wfile.write(
+                            (u'device,%d,%s,%s/%s/%s\n' %
+                             (address,
+                              device['type'],
+                                 device['room'],
+                                 device['pos'],
+                                 device['name'])).encode('utf-8'))
                 self.wfile.write((u'deviceend\n'))
                 for address, device in devices.iteritems():
                     if device['type'] != "scenectl":
